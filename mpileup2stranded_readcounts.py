@@ -71,7 +71,6 @@ def main():
             #base_quals = cols[5]
             base_pos_str = cols[6]
 
-            print(line, file=sys.stderr)
             read_counts, base_pos_counts = _get_counts(base_str, base_pos_str, ref_allele)
             unstranded_read_counts = _stranded2unstranded(read_counts)
             unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
