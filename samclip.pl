@@ -26,7 +26,7 @@ use constant {
 
 my $max      = 20;
 my $max_read_mismatch = 2;
-my $max_pair_mismatch = 2;
+my $max_pair_mismatch = 3;
 my $ref      = '';
 my $debug    = 0;
 my $progress = 100_000;
