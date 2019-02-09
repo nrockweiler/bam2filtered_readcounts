@@ -2,8 +2,16 @@
 """Convert mpileup format to stranded readcounts format.  Stranded readcounts are printed to STDOUT.
 
 OUTPUT COLUMNS:
+If --output-format == 'txt': the first columns are:
    1  chr = chromosome
    2  pos = position (1-based)
+
+If --output-format == 'bed': the first columns are:
+   1  chr = chromosome
+   2  start = start (0-based, INclusive)
+   3  end = end (1-based, EXclusive)
+
+The remaining columns are (indexes are relative to a txt output file):
    3  ref_allele = reference allele
    4  alt_allele = alternative allele (non-reference allele with highest coverage; if ties, the first allele when sorted alphabetically is used)
    5  ref_count = total ref coverage
@@ -44,8 +52,16 @@ def main():
 
     poi = _load_poi(args.variant_bed)
 
+    if args.output_format == 'txt':
+        _get_position_format_ref = _get_txt_position_format
+    elif args.output_format == 'bed':
+        _get_position_format_ref = _get_bed_position_format
+    else:
+        print('ERROR: unknown output format \'%s\'.' % (args.output_format))
+        sys.exit(1)
+
     if args.header:
-        _print_header()
+        _print_header(args.output_format)
 
     if args.mpileup is None:
         mpileup_fh = sys.stdin
@@ -76,12 +92,12 @@ def main():
             unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
             alt_allele = _get_alt_allele(unstranded_read_counts, ref_allele)
 
-            max_internal_base_pos = _get_max_internal_base_pos(unstranded_base_pos_counts, args.read_length)
+            max_internal_base_pos = _get_max_internal_base_pos(unstranded_base_pos_counts, args.read_length, line)
 
-            _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, args.sample)
+            _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, args.sample, _get_position_format_ref)
         else: # There is no coverage here
 
-            _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample)
+            _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
 
     mpileup_fh.close()
 
@@ -143,10 +159,27 @@ def _parse_cmd_line():
         help='Length of sequencing reads.  Value is used to determine if alt alleles are near the ends of sequencing reads.'
     )
 
+    parser.add_argument(
+        '--output-format',
+        '-o',
+        default='txt',
+        choices=['bed','txt'],
+        help='output format.  Bed outputs a stranded readcount in bed format with chrom/start/end.  Txt outputs a stranded readcount with just chrom/1-based pos.'
+    )
+
     args = parser.parse_args()
 
     return args
-def _get_max_internal_base_pos(base_pos_counts, read_length):
+
+def _get_txt_position_format(chrom, pos_1based):
+
+    return([chrom, pos_1based])
+
+def _get_bed_position_format(chrom, pos_1based):
+
+    return([chrom, int(pos_1based) - 1, pos_1based])
+
+def _get_max_internal_base_pos(base_pos_counts, read_length, line):
     """Distance is relative to the closer end of the read"""
     max_internal_base_pos = {}
     read_midpoint = (read_length - 1)/ 2 + 1
@@ -156,7 +189,7 @@ def _get_max_internal_base_pos(base_pos_counts, read_length):
             for base_pos in base_positions:
                 pos_from_closer_end = min(base_pos - 1, read_length - base_pos) # -1 so when base_pos = 1 (1-based), the distance = 0; similarily, when base_pos = read_length, disatnce = 0.  Note.  The distances are a little screwy if there is soft clipping, but we've already removed those heavily softclipped reads so it shouldn't affect the distance too much.
                 if pos_from_closer_end < 0:
-                    print('ERROR: read length must not be correct.  There are read positions (%d) greater than the specified read length (%d)' % (base_pos, read_length), file=sys.stderr)
+                    print('ERROR: read length must not be correct.  There are read positions (%d) greater than the specified read length (%d).  Line was:\n    %s' % (base_pos, read_length, line), file=sys.stderr)
                     sys.exit(1)
                 if pos_from_closer_end >= m:
                     m = pos_from_closer_end
@@ -275,18 +308,20 @@ def _get_counts(base_str, base_pos_str, ref_allele):
 
     return(read_counts, base_pos_counts)
 
-def _print_line_no_cov(chrom, pos_1based, ref_allele, sample):
+def _print_line_no_cov(chrom, pos_1based, ref_allele, sample, _get_position_format_ref):
 
     alt_allele = 'NA' 
     read_counts = {i:0 for i in "ACGTNacgtn"}
 
-    line = ([chrom, pos_1based, ref_allele, alt_allele, 0, 0, 0, 0, 0, 'NA'] + 
+    position_cols = _get_position_format_ref(chrom, pos_1based)
+    line = (position_cols + 
+           [ref_allele, alt_allele, 0, 0, 0, 0, 0, 'NA'] + 
            [read_counts[i] for i in 'AaCcGgTtNn'] +
            [sample])
 
     print('\t'.join(list(map(str, line))))
     return None  
-def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, sample):
+def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, sample, _get_position_format_ref):
 
     lc_alt_allele = alt_allele.lower()
     if (read_counts[alt_allele] > 0 and read_counts[lc_alt_allele] > 0):
@@ -294,25 +329,32 @@ def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstrand
     else:
         alt_on_both_strands = 0    
 
-    line = ([chrom, 
-             pos_1based, 
-             ref_allele, 
-             alt_allele, 
-             unstranded_read_counts[ref_allele],
-             unstranded_read_counts[alt_allele], 
-             read_counts[alt_allele],
-             read_counts[lc_alt_allele],
-             alt_on_both_strands,
-             max_internal_base_pos[alt_allele]] + 
+    position_cols = _get_position_format_ref(chrom, pos_1based)
+
+    line = (position_cols +
+           [ref_allele, 
+            alt_allele, 
+            unstranded_read_counts[ref_allele],
+            unstranded_read_counts[alt_allele], 
+            read_counts[alt_allele],
+            read_counts[lc_alt_allele],
+            alt_on_both_strands,
+            max_internal_base_pos[alt_allele]] + 
            [read_counts[i] for i in 'AaCcGgTtNn'] +
            [sample])
 
     print('\t'.join(list(map(str, line))))
     return None  
 
-def _print_header():
+def _print_header(output_format):
 
-    print('\t'.join(['chr', 'pos', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
+    if output_format == 'txt':
+        print('\t'.join(['chr', 'pos', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
+    elif output_format == 'bed':
+        print('\t'.join(['chr', 'start', 'end', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
+    else:
+        print('ERROR: unknown output format \'%s\'.' % (args.output_format))
+        sys.exit(1)
 
     return None
 
