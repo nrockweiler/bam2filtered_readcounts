@@ -157,7 +157,12 @@ msg("clip removed $softclip_removed");
 msg("clip both sides removed $softclip_both_sides_removed");
 msg("mismatch read (NM) removed $mismatch_read_removed");
 msg("mismatch pair (nM) removed $mismatch_pair_removed");
-msg(sprintf("allowed $kept (%.1f%%)", $kept / $total * 100));
+
+if ($total > 0) {
+    msg(sprintf("allowed $kept (%.1f%%)", $kept / $total * 100));
+} else {
+    msg(sprintf("allowed $kept (NA%)"));
+}
 msg("Header contained $header lines");
 
 #----------------------------------------------------------------------
