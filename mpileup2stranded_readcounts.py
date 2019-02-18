@@ -19,18 +19,20 @@ The remaining columns are (indexes are relative to a txt output file):
    7  alt_pos_count = alt coverage on + strand
    8  alt_neg_count = alt coverage on - strand
    9  alt_on_both_strands = 1 if alt was observed on + and - strand; 0 otherwise
-  10  max_alt_pos = most internal position of the alt allele on the reads, e.g., 2 means the alt allele was observed 2bp from the end.  No other read containing the alt read had an alt base closer to the center of the read.
-  11  A_count = A coverage on + strand
-  12  a_count = A coverage on - strand
-  13  C_count = C coverage on + strand
-  14  c_count = C coverage on - strand
-  15  G_count = G coverage on + strand
-  16  g_count = G coverage on - strand
-  17  T_count = T coverage on + strand
-  18  t_count = T coverage on - strand
-  19  N_count = N coverage on + strand
-  20  n_count = N coverage on - strand
-  21  sample = Sample ID (useful when concatenating multiple readcount files)
+  10  max_alt_pos = If position has > 0 alt, most internal position of the alt allele on the reads, e.g., 2 means the alt allele was observed 2bp from the end.  No other read containing the alt read had an alt base closer to the center of the read.  Else, = NA.  Note: distance is relative to the *closer end* of the read.
+  11  avg_alt_pos = If position has > 0 alt, average position of the alt allele on the reads.  Else, = NA.  Note: distance is relative to the *start* of the read.
+  11  std_alt_pos = If position has > 0 alt, standard deviation of the alt allele on the reads.  Else, = NA.  Note: distance is relative to the *start* of the read.
+  12  A_count = A coverage on + strand
+  13  a_count = A coverage on - strand
+  14  C_count = C coverage on + strand
+  15  c_count = C coverage on - strand
+  16  G_count = G coverage on + strand
+  17  g_count = G coverage on - strand
+  18  T_count = T coverage on + strand
+  19  t_count = T coverage on - strand
+  20  N_count = N coverage on + strand
+  21  n_count = N coverage on - strand
+  22  sample = Sample ID (useful when concatenating multiple readcount files)
 
 NOTES:
  - mpileup2readcounts and mpileup2stranded_readcounts output different columns.  Check the usage
@@ -50,7 +52,7 @@ def main():
 
     args = _parse_cmd_line()
 
-    poi = _load_poi(args.variant_bed)
+    poi = _load_poi(args.region_bed)
 
     if args.output_format == 'txt':
         _get_position_format_ref = _get_txt_position_format
@@ -92,9 +94,10 @@ def main():
             unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
             alt_allele = _get_alt_allele(unstranded_read_counts, ref_allele)
 
-            max_internal_base_pos = _get_max_internal_base_pos(unstranded_base_pos_counts, args.read_length, line)
+            # Calculate the max internal, average position, and standard deviation of each base
+            max_internal_base_pos, avg_base_pos, std_base_pos = _get_pos_statistics(unstranded_base_pos_counts, args.read_length, line)
 
-            _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, args.sample, _get_position_format_ref)
+            _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, avg_base_pos, std_base_pos, args.sample, _get_position_format_ref)
         else: # There is no coverage here
 
             _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
@@ -103,17 +106,20 @@ def main():
 
 def _load_poi(bed_fn):
 
-    poi = {} # key = chrom:1-based position; value = 1 (dummy)
+    poi = {} # key = chrom:1-based position; value = 1 (dummy).  (Use 1-based since mpileup is 1-based)
     with open(bed_fn, 'rU') as bed_fh:
         for line in bed_fh:
             line = line.rstrip('\n')
             cols = line.split('\t')
-            chrom = cols[0]
-            # start = cols[1]
-            end = cols[2]
 
-            pos_key = ':'.join([chrom, end])
-            poi[pos_key] = 1
+            # Add each position in the region to the poi (this was an easier hack than merging and comparing an mpileup position to regions)
+            chrom = cols[0]
+            start = int(cols[1])
+            end = int(cols[2])
+
+            for i in range(start,end):
+                pos_key = ':'.join([chrom, str(i + 1)]) # Use 1-based.  See note above.
+                poi[pos_key] = 1
 
     return(poi)
 
@@ -133,9 +139,9 @@ def _parse_cmd_line():
     )
 
     parser.add_argument(
-        '--variant-bed',
+        '--region-bed',
         '-b',
-        help='path to bed of variants.  Readcounts will be filtered for just these regions.'
+        help='path to bed of regions/variants.  Readcounts will be filtered for just these regions.'
     )
     parser.add_argument(
         '--sample',
@@ -179,55 +185,38 @@ def _get_bed_position_format(chrom, pos_1based):
 
     return([chrom, int(pos_1based) - 1, pos_1based])
 
-def _get_max_internal_base_pos(base_pos_counts, read_length, line):
-    """Distance is relative to the closer end of the read"""
+def _get_pos_statistics(base_pos_counts, read_length, line):
+    """For each base, calculate the 
+        - maximum internal position (note: distance is relative to the closer end of the read)
+        - average position (note: distance is relative to the start of the read)
+        - standard deviation position (note: distance is relative to the start of the read)"""
     max_internal_base_pos = {}
+    min_internal_base_pos = {} # Used for checking if submitted read length may not be correct
+    avg_base_pos = {}
+    std_base_pos = {}
     read_midpoint = (read_length - 1)/ 2 + 1
     for base, base_positions in base_pos_counts.items():
         if len(base_positions):
-            m = -1 # m will store the maxmimum internal base position.  Initialize it to a value that will never be a distance so can make sure it was set.
-            for base_pos in base_positions:
-                pos_from_closer_end = min(base_pos - 1, read_length - base_pos) # -1 so when base_pos = 1 (1-based), the distance = 0; similarily, when base_pos = read_length, disatnce = 0.  Note.  The distances are a little screwy if there is soft clipping, but we've already removed those heavily softclipped reads so it shouldn't affect the distance too much.
-                if pos_from_closer_end < 0:
-                    print('ERROR: read length must not be correct.  There are read positions (%d) greater than the specified read length (%d).  Line was:\n    %s' % (base_pos, read_length, line), file=sys.stderr)
-                    sys.exit(1)
-                if pos_from_closer_end >= m:
-                    m = pos_from_closer_end
-    
-                    if abs(m - read_midpoint) <= 0.5: # if m = the midpoint (when read length is odd) or if m is within 1/2 of midpoint (when the read length is even), there can be no closer reads to the middle
-                        break
-            if m == -1:
-                print('ERROR: could not find max internal base position for base pos counts \'%s\'' % (base_pos_counts), file=sys.stderr)
+
+            pos_from_closer_end_list = [min(base_pos - 1, read_length - base_pos) for base_pos in base_positions] # -1 so when base_pos = 1 (1-based), the distance = 0; similarily, when base_pos = read_length, disatnce = 0.  Note.  The distances are a little screwy if there is soft clipping, but we've already removed those heavily softclipped reads so it shouldn't affect the distance too much.
+            
+            # If there are negative positions, the read length must not have been correct
+            max_internal_base_pos[base] = np.max(pos_from_closer_end_list)
+            min_internal_base_pos[base] = np.min(pos_from_closer_end_list)
+            if min_internal_base_pos[base] < 0:
+                print('ERROR: read length must not be correct.  There are read positions (%d) greater than the specified read length (%d).  Line was:\n    %s' % (base_pos, read_length, line), file=sys.stderr)
                 sys.exit(1)
+
+            avg_base_pos[base] = np.average(base_positions)
+            std_base_pos[base] = np.std(base_positions)
         else:
-            m = 'NA' # If there is no coverage for this base, statistic is undefined
-        max_internal_base_pos[base] = m
+            # If there is no coverage for this base, statistic is undefined
+            max_internal_base_pos[base] = 'NA'
+            avg_base_pos[base] = 'NA'
+            std_base_pos[base] = 'NA'
 
-    return(max_internal_base_pos)
+    return(max_internal_base_pos, avg_base_pos, std_base_pos)
 
-def _get_max_internal_base_pos_old(base_pos_counts, read_midpoint):
-    """Distance is releative to the midpoint of the read"""
-
-    max_internal_base_pos = {}
-    for base, base_positions in base_pos_counts.items():
-        if len(base_positions):
-            m = float('inf') # Maxmimum internal base position
-            for base_pos in base_positions:
-                pos_from_middle = abs(base_pos - read_midpoint)
-                if pos_from_middle <= m:
-                    m = pos_from_middle
-    
-                    if abs(m - read_midpoint) <= 0.5: # if m = the midpoint (when read length is odd) or if m is within 1/2 of midpoint (when the read length is even), there can be no closer reads to the middle
-                        break
-    
-            if m == float('inf'):
-                print('ERROR: could not find max internal base position for base pos counts \'%s\'' % (base_pos_counts), file=sys.stderr)
-                sys.exit(1)
-        else:
-            m = 'NA' # If there is no coverage for this base, statistic is undefined
-        max_internal_base_pos[base] = m
-
-    return(max_internal_base_pos)
 
 def _get_alt_allele(unstranded_read_counts, ref_allele):
     # Alt allele is defined as the allele with the highest non-reference coverage. 
@@ -321,7 +310,7 @@ def _print_line_no_cov(chrom, pos_1based, ref_allele, sample, _get_position_form
 
     print('\t'.join(list(map(str, line))))
     return None  
-def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, sample, _get_position_format_ref):
+def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, avg_base_pos, std_base_pos, sample, _get_position_format_ref):
 
     lc_alt_allele = alt_allele.lower()
     if (read_counts[alt_allele] > 0 and read_counts[lc_alt_allele] > 0):
@@ -339,7 +328,9 @@ def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstrand
             read_counts[alt_allele],
             read_counts[lc_alt_allele],
             alt_on_both_strands,
-            max_internal_base_pos[alt_allele]] + 
+            max_internal_base_pos[alt_allele],
+            avg_base_pos[alt_allele],
+            std_base_pos[alt_allele]] + 
            [read_counts[i] for i in 'AaCcGgTtNn'] +
            [sample])
 
@@ -349,9 +340,9 @@ def _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstrand
 def _print_header(output_format):
 
     if output_format == 'txt':
-        print('\t'.join(['chr', 'pos', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
+        print('\t'.join(['chr', 'pos', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_internal_alt_pos', 'avg_alt_pos', 'std_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
     elif output_format == 'bed':
-        print('\t'.join(['chr', 'start', 'end', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
+        print('\t'.join(['chr', 'start', 'end', 'ref_allele', 'alt_allele', 'ref_count', 'alt_count', 'alt_pos_count', 'alt_neg_count', 'alt_on_both_strands', 'max_internal_alt_pos', 'avg_alt_pos', 'std_alt_pos'] + ['%s_count\t%s_count' % (i, i.lower()) for i in 'ACGTN'] + ['sample']))
     else:
         print('ERROR: unknown output format \'%s\'.' % (args.output_format))
         sys.exit(1)
