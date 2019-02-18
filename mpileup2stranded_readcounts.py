@@ -52,7 +52,12 @@ def main():
 
     args = _parse_cmd_line()
 
-    poi = _load_poi(args.region_bed)
+    if args.region_bed is None:
+        poi = {}
+        _process_pos_ref = _process_pos_dummy
+    else:
+        poi = _load_poi(args.region_bed)
+        _process_pos_ref = _process_pos_poi
 
     if args.output_format == 'txt':
         _get_position_format_ref = _get_txt_position_format
@@ -69,6 +74,7 @@ def main():
         mpileup_fh = sys.stdin
     else:
         mpileup_fh = open(args.mpileup, 'rU')
+
     for line in mpileup_fh:
         line = line.rstrip('\n')
         cols = line.split('\t')
@@ -78,29 +84,32 @@ def main():
         pos_key = ':'.join([chrom, pos_1based])
 
         # If this is not at a position of interest, skip it
-        if not (pos_key in poi):
-            continue
+        if _process_pos_ref(poi, poi):
 
-        ref_allele = cols[2].upper()
-        depth = int(cols[3])
+            ref_allele = cols[2].upper()
+            depth = int(cols[3])
+    
+            if depth > 0:
+                base_str = cols[4]
+                #base_quals = cols[5]
+                base_pos_str = cols[6]
+    
+                read_counts, base_pos_counts, total_count = _get_counts(base_str, base_pos_str, ref_allele)
 
-        if depth > 0:
-            base_str = cols[4]
-            #base_quals = cols[5]
-            base_pos_str = cols[6]
-
-            read_counts, base_pos_counts = _get_counts(base_str, base_pos_str, ref_allele)
-            unstranded_read_counts = _stranded2unstranded(read_counts)
-            unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
-            alt_allele = _get_alt_allele(unstranded_read_counts, ref_allele)
-
-            # Calculate the max internal, average position, and standard deviation of each base
-            max_internal_base_pos, avg_base_pos, std_base_pos = _get_pos_statistics(unstranded_base_pos_counts, args.read_length, line)
-
-            _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, avg_base_pos, std_base_pos, args.sample, _get_position_format_ref)
-        else: # There is no coverage here
-
-            _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
+                if total_count > 0:
+                    unstranded_read_counts = _stranded2unstranded(read_counts)
+                    unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
+                    alt_allele = _get_alt_allele(unstranded_read_counts, ref_allele)
+        
+                    # Calculate the max internal, average position, and standard deviation of each base
+                    max_internal_base_pos, avg_base_pos, std_base_pos = _get_pos_statistics(unstranded_base_pos_counts, args.read_length, line)
+        
+                    _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, avg_base_pos, std_base_pos, args.sample, _get_position_format_ref)
+                elif args.print_sites_w_no_coverage: # This can happen, e.g., only spliced reads overlap the position
+                    _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
+            elif args.print_sites_w_no_coverage: # There is no coverage here
+    
+                _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
 
     mpileup_fh.close()
 
@@ -141,7 +150,8 @@ def _parse_cmd_line():
     parser.add_argument(
         '--region-bed',
         '-b',
-        help='path to bed of regions/variants.  Readcounts will be filtered for just these regions.'
+        help='path to bed of regions/variants.  Readcounts will be filtered for just these regions.',
+        required=False
     )
     parser.add_argument(
         '--sample',
@@ -155,6 +165,13 @@ def _parse_cmd_line():
         '-hd',
         action='store_true',
         help='if specified, a header will be printed.  Useful when not concatenating readcount files and when you want to know what those darn columns are.'
+    )
+
+    parser.add_argument(
+        '--print-sites-w-no-coverage',
+        '-p',
+        action='store_true',
+        help='if specified, print sites with no coverage.  These are sites that only have spliced read coverage and/or are sites in the regions of interest that had 0X coverage.'
     )
 
     parser.add_argument(
@@ -294,8 +311,9 @@ def _get_counts(base_str, base_pos_str, ref_allele):
     
     read_counts = _finialize_counts(read_counts, ref_allele)
     base_pos_counts = _finialize_counts(base_pos_counts, ref_allele)
+    total_count = sum(read_counts.values())
 
-    return(read_counts, base_pos_counts)
+    return(read_counts, base_pos_counts, total_count)
 
 def _print_line_no_cov(chrom, pos_1based, ref_allele, sample, _get_position_format_ref):
 
@@ -375,6 +393,20 @@ def _initialize_counts(ref_allele):
 
     return(read_counts, base_pos_counts)
 
+def _process_pos_dummy(pos_key, poi):
+    """Dummy function to always return True.  Needed if no POI were submitted"""
+
+    process = True
+
+    return(process)
+
+def _process_pos_poi(pos_key, poi):
+
+    process = False
+    if pos_key in poi:
+        process = True
+
+    return(process)
 
 if __name__ == '__main__':
     main()
