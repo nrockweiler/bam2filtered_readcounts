@@ -86,7 +86,7 @@ def main():
         pos_key = ':'.join([chrom, pos_1based])
 
         # Only process if this is a position of interest
-        if _process_pos_ref(poi, poi):
+        if _process_pos_ref(pos_key, poi):
 
             ref_allele = cols[2].upper()
 
@@ -120,7 +120,7 @@ def main():
             num_poi += 1
 
     mpileup_fh.close()
-    print("INFO: number of POI with ambiguous reference alleles= %.1E%% (%d/%d)" % (num_ambiguous_ref/num_poi*100 , num_ambiguous_ref, num_poi), file=sys.stderr)
+    print("INFO: number of POI with ambiguous reference alleles=%.1E%% (%d/%d)" % (num_ambiguous_ref/num_poi*100 , num_ambiguous_ref, num_poi), file=sys.stderr)
 
 def _load_poi(bed_fn):
 
