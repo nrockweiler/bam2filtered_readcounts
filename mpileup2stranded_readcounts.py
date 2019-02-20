@@ -75,6 +75,8 @@ def main():
     else:
         mpileup_fh = open(args.mpileup, 'rU')
 
+    num_ambiguous_ref = 0
+    num_poi = 0
     for line in mpileup_fh:
         line = line.rstrip('\n')
         cols = line.split('\t')
@@ -83,35 +85,42 @@ def main():
 
         pos_key = ':'.join([chrom, pos_1based])
 
-        # If this is not at a position of interest, skip it
+        # Only process if this is a position of interest
         if _process_pos_ref(poi, poi):
 
             ref_allele = cols[2].upper()
-            depth = int(cols[3])
-    
-            if depth > 0:
-                base_str = cols[4]
-                #base_quals = cols[5]
-                base_pos_str = cols[6]
-    
-                read_counts, base_pos_counts, total_count = _get_counts(base_str, base_pos_str, ref_allele)
 
-                if total_count > 0:
-                    unstranded_read_counts = _stranded2unstranded(read_counts)
-                    unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
-                    alt_allele = _get_alt_allele(unstranded_read_counts, ref_allele)
+            # Only process if the reference is unambiguous
+            if ref_allele in 'ACGT':
+                depth = int(cols[3])
         
-                    # Calculate the max internal, average position, and standard deviation of each base
-                    max_internal_base_pos, avg_base_pos, std_base_pos = _get_pos_statistics(unstranded_base_pos_counts, args.read_length, line)
+                if depth > 0:
+                    base_str = cols[4]
+                    #base_quals = cols[5]
+                    base_pos_str = cols[6]
         
-                    _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, avg_base_pos, std_base_pos, args.sample, _get_position_format_ref)
-                elif args.print_sites_w_no_coverage: # This can happen, e.g., only spliced reads overlap the position
-                    _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
-            elif args.print_sites_w_no_coverage: # There is no coverage here
+                    read_counts, base_pos_counts, total_count = _get_counts(base_str, base_pos_str, ref_allele)
     
-                _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
+                    if total_count > 0:
+                        unstranded_read_counts = _stranded2unstranded(read_counts)
+                        unstranded_base_pos_counts = _stranded2unstranded(base_pos_counts)
+                        alt_allele = _get_alt_allele(unstranded_read_counts, ref_allele)
+            
+                        # Calculate the max internal, average position, and standard deviation of each base
+                        max_internal_base_pos, avg_base_pos, std_base_pos = _get_pos_statistics(unstranded_base_pos_counts, args.read_length, line)
+            
+                        _print_line(chrom, pos_1based, ref_allele, alt_allele, read_counts, unstranded_read_counts, max_internal_base_pos, avg_base_pos, std_base_pos, args.sample, _get_position_format_ref)
+                    elif args.print_sites_w_no_coverage: # This can happen, e.g., only spliced reads overlap the position
+                        _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
+                elif args.print_sites_w_no_coverage: # There is no coverage here
+        
+                    _print_line_no_cov(chrom, pos_1based, ref_allele, args.sample, _get_position_format_ref)
+            else:
+                num_ambiguous_ref += 1
+            num_poi += 1
 
     mpileup_fh.close()
+    print("INFO: number of POI with ambiguous reference alleles= %.1E%% (%d/%d)" % (num_ambiguous_ref/num_poi*100 , num_ambiguous_ref, num_poi), file=sys.stderr)
 
 def _load_poi(bed_fn):
 
