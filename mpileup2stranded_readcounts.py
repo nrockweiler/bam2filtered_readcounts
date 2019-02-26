@@ -230,7 +230,7 @@ def _get_pos_statistics(base_pos_counts, read_length, line):
             max_internal_base_pos[base] = np.max(pos_from_closer_end_list)
             min_internal_base_pos[base] = np.min(pos_from_closer_end_list)
             if min_internal_base_pos[base] < 0:
-                print('ERROR: read length must not be correct.  There are read positions (%d) greater than the specified read length (%d).  Line was:\n    %s' % (base_pos, read_length, line), file=sys.stderr)
+                print('ERROR: read length must not be correct.  There are read positions greater than the specified read length (%d).  Line was:\n    %s' % (read_length, line), file=sys.stderr)
                 sys.exit(1)
 
             avg_base_pos[base] = np.average(base_positions)
