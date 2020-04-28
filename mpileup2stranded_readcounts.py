@@ -71,8 +71,13 @@ def main():
         _print_header(args.output_format)
 
     if args.mpileup is None:
+        # Apparently there's no good way to check if stdin is non-empty # https://stackoverflow.com/questions/3762881/how-do-i-check-if-stdin-has-some-data.  Warning is issued later if nothing was seen.
         mpileup_fh = sys.stdin
     else:
+        if (os.stat(args.mpileup).st_size == 0):
+            print('ERROR: --mpileup file \'%s\' is empty. File should not be empty.' % (args.mpileup), file=sys.stderr)
+            sys.exit(1)
+
         mpileup_fh = open(args.mpileup, 'rU')
 
     num_ambiguous_ref = 0
@@ -120,9 +125,18 @@ def main():
             num_poi += 1
 
     mpileup_fh.close()
-    print("INFO: number of POI with ambiguous reference alleles=%.1E%% (%d/%d)" % (num_ambiguous_ref/num_poi*100 , num_ambiguous_ref, num_poi), file=sys.stderr)
+    if (num_poi == 0):
+        print("WARNING: no POI were found in the input mpileup file (--mpileup).  If this isn't expected, check if 1) the chromosome naming convention is the same in the --mpileup and --region-bed (if supplied) files and/or 2) input files are non-empty", file=sys.stderr)
+
+        print("INFO: number of POI with ambiguous reference alleles=NA%% (%d/%d)" % (num_ambiguous_ref, num_poi), file=sys.stderr)
+    else:
+        print("INFO: number of POI with ambiguous reference alleles=%.1E%% (%d/%d)" % (num_ambiguous_ref/num_poi*100 , num_ambiguous_ref, num_poi), file=sys.stderr)
 
 def _load_poi(bed_fn):
+
+    if os.stat(bed_fn).st_size == 0:
+        print("ERROR: bed file %s is empty.  File should be non-empty." % (bed_fn), file=sys.stderr)
+        sys.exit(1)
 
     poi = {} # key = chrom:1-based position; value = 1 (dummy).  (Use 1-based since mpileup is 1-based)
     with open(bed_fn, 'rU') as bed_fh:
